@@ -17,6 +17,7 @@ package com.loopj.android.http;
 
 import android.content.Context;
 import android.os.Looper;
+import android.text.TextUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -85,6 +86,10 @@ import cz.msebera.android.httpclient.protocol.BasicHttpContext;
 import cz.msebera.android.httpclient.protocol.ExecutionContext;
 import cz.msebera.android.httpclient.protocol.HttpContext;
 import cz.msebera.android.httpclient.protocol.SyncBasicHttpContext;
+import okhttp3.Interceptor;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 
 
 /**
@@ -129,7 +134,7 @@ public class AsyncHttpClient {
     public static final int DEFAULT_RETRY_SLEEP_TIME_MILLIS = 1500;
     public static final int DEFAULT_SOCKET_BUFFER_SIZE = 8192;
     public static LogInterface log = new LogHandler();
-    private final DefaultHttpClient httpClient;
+    private final OkHttpClient httpClient;
     private final HttpContext httpContext;
     private final Map<Context, List<RequestHandle>> requestMap;
     private final Map<String, String> clientHeaderMap;
@@ -204,77 +209,71 @@ public class AsyncHttpClient {
         clientHeaderMap = new HashMap<String, String>();
 
         httpContext = new SyncBasicHttpContext(new BasicHttpContext());
-        httpClient = new DefaultHttpClient(cm, httpParams);
-        httpClient.addRequestInterceptor(new HttpRequestInterceptor() {
-            @Override
-            public void process(HttpRequest request, HttpContext context) {
-                if (!request.containsHeader(HEADER_ACCEPT_ENCODING)) {
-                    request.addHeader(HEADER_ACCEPT_ENCODING, ENCODING_GZIP);
-                }
-                for (String header : clientHeaderMap.keySet()) {
-                    if (request.containsHeader(header)) {
-                        Header overwritten = request.getFirstHeader(header);
-                        log.d(LOG_TAG,
-                                String.format("Headers were overwritten! (%s | %s) overwrites (%s | %s)",
-                                        header, clientHeaderMap.get(header),
-                                        overwritten.getName(), overwritten.getValue())
-                        );
-
-                        //remove the overwritten header
-                        request.removeHeader(overwritten);
-                    }
-                    request.addHeader(header, clientHeaderMap.get(header));
-                }
-            }
-        });
-
-        httpClient.addResponseInterceptor(new HttpResponseInterceptor() {
-            @Override
-            public void process(HttpResponse response, HttpContext context) {
-                final HttpEntity entity = response.getEntity();
-                if (entity == null) {
-                    return;
-                }
-                final Header encoding = entity.getContentEncoding();
-                if (encoding != null) {
-                    for (HeaderElement element : encoding.getElements()) {
-                        if (element.getName().equalsIgnoreCase(ENCODING_GZIP)) {
-                            response.setEntity(new InflatingEntity(entity));
-                            break;
+        httpClient = new OkHttpClient.Builder()
+                .addInterceptor(new Interceptor() {
+                    @Override
+                    public Response intercept(Chain chain) throws IOException {
+                        Request request = chain.request();
+                        Request.Builder builder = request.newBuilder();
+                        if (TextUtils.isEmpty(request.header(HEADER_ACCEPT_ENCODING))) {
+                            builder.addHeader(HEADER_ACCEPT_ENCODING, ENCODING_GZIP);
                         }
+                        for (String header : clientHeaderMap.keySet()) {
+                            builder.removeHeader(header);
+                            builder.addHeader(header, clientHeaderMap.get(header));
+                        }
+                        return chain.proceed(builder.build());
                     }
-                }
-            }
-        });
+                })
+                .build();
 
-        httpClient.addRequestInterceptor(new HttpRequestInterceptor() {
-            @Override
-            public void process(final HttpRequest request, final HttpContext context) throws HttpException, IOException {
-
-                AuthSchemeRegistry authSchemeRegistry = new AuthSchemeRegistry();
-                authSchemeRegistry.register("Bearer", new BearerAuthSchemeFactory());
-                context.setAttribute(ClientContext.AUTHSCHEME_REGISTRY, authSchemeRegistry);
-
-                AuthState authState = (AuthState) context.getAttribute(ClientContext.TARGET_AUTH_STATE);
-                CredentialsProvider credsProvider = (CredentialsProvider) context.getAttribute(
-                        ClientContext.CREDS_PROVIDER);
-                HttpHost targetHost = (HttpHost) context.getAttribute(ExecutionContext.HTTP_TARGET_HOST);
-
-                if (authState.getAuthScheme() == null) {
-                    AuthScope authScope = new AuthScope(targetHost.getHostName(), targetHost.getPort());
-                    Credentials creds = credsProvider.getCredentials(authScope);
-                    if (creds instanceof TokenCredentials) {
-                        authState.setAuthScheme(new BearerAuthSchemeFactory.BearerAuthScheme());
-                        authState.setCredentials(creds);
-                    } else if (creds != null) {
-                        authState.setAuthScheme(new BasicScheme());
-                        authState.setCredentials(creds);
-                    }
-                }
-            }
-        }, 0);
-
-        httpClient.setHttpRequestRetryHandler(new RetryHandler(DEFAULT_MAX_RETRIES, DEFAULT_RETRY_SLEEP_TIME_MILLIS));
+//        httpClient.addResponseInterceptor(new HttpResponseInterceptor() {
+//            @Override
+//            public void process(HttpResponse response, HttpContext context) {
+//                final HttpEntity entity = response.getEntity();
+//                if (entity == null) {
+//                    return;
+//                }
+//                final Header encoding = entity.getContentEncoding();
+//                if (encoding != null) {
+//                    for (HeaderElement element : encoding.getElements()) {
+//                        if (element.getName().equalsIgnoreCase(ENCODING_GZIP)) {
+//                            response.setEntity(new InflatingEntity(entity));
+//                            break;
+//                        }
+//                    }
+//                }
+//            }
+//        });
+//
+//        httpClient.addRequestInterceptor(new HttpRequestInterceptor() {
+//            @Override
+//            public void process(final HttpRequest request, final HttpContext context) throws HttpException, IOException {
+//
+//                AuthSchemeRegistry authSchemeRegistry = new AuthSchemeRegistry();
+//                authSchemeRegistry.register("Bearer", new BearerAuthSchemeFactory());
+//                context.setAttribute(ClientContext.AUTHSCHEME_REGISTRY, authSchemeRegistry);
+//
+//                AuthState authState = (AuthState) context.getAttribute(ClientContext.TARGET_AUTH_STATE);
+//                CredentialsProvider credsProvider = (CredentialsProvider) context.getAttribute(
+//                        ClientContext.CREDS_PROVIDER);
+//                HttpHost targetHost = (HttpHost) context.getAttribute(ExecutionContext.HTTP_TARGET_HOST);
+//
+//                if (authState.getAuthScheme() == null) {
+//                    AuthScope authScope = new AuthScope(targetHost.getHostName(), targetHost.getPort());
+//                    Credentials creds = credsProvider.getCredentials(authScope);
+//                    if (creds instanceof TokenCredentials) {
+//                        authState.setAuthScheme(new BearerAuthSchemeFactory.BearerAuthScheme());
+//                        authState.setCredentials(creds);
+//                    } else if (creds != null) {
+//                        authState.setAuthScheme(new BasicScheme());
+//                        authState.setCredentials(creds);
+//                    }
+//                }
+//            }
+//        }, 0);
+//
+//        httpClient.setHttpRequestRetryHandler(new RetryHandler(DEFAULT_MAX_RETRIES, DEFAULT_RETRY_SLEEP_TIME_MILLIS));
     }
 
     /**
@@ -460,7 +459,7 @@ public class AsyncHttpClient {
      *
      * @return underlying HttpClient instance
      */
-    public HttpClient getHttpClient() {
+    public OkHttpClient getHttpClient() {
         return this.httpClient;
     }
 
